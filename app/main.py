@@ -1,14 +1,19 @@
 """FastAPI app: /upload, /chat, /reset, and a static chat UI at /."""
 from __future__ import annotations
 import os, tempfile
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import store as store_mod, ingest, query as qmod, search, generate, mistral
 
 app = FastAPI(title="Mini RAG")
+
+
+@app.exception_handler(Exception)
+async def _unhandled(_req: Request, exc: Exception):
+    return JSONResponse(status_code=500, content={"answer": f"Server error: {type(exc).__name__}: {exc}", "citations": []})
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -37,8 +42,12 @@ async def upload(files: list[UploadFile] = File(...)):
                 added.append({"file": f.filename, "chunks": 0, "warn": "no extractable text"})
                 continue
             embs = mistral.embed([c.text for c in chunks])
+            replaced = _store.remove_doc(f.filename)
             _store.add(chunks, embs)
-            added.append({"file": f.filename, "chunks": len(chunks)})
+            entry = {"file": f.filename, "chunks": len(chunks)}
+            if replaced:
+                entry["replaced"] = replaced
+            added.append(entry)
         finally:
             os.unlink(path)
     store_mod.save(_store)
@@ -81,7 +90,7 @@ def chat(body: ChatIn):
     rewritten = qmod.transform(q)
 
     # 4. hybrid search
-    hits = search.hybrid(_store, rewritten, k=body.k)
+    hits = search.retrieve(_store, rewritten, k=body.k)
 
     # 5. generate answer with citations + evidence check
     out = generate.answer(q, hits, intent)
@@ -96,6 +105,15 @@ def reset():
     _store = store_mod.Store()
     store_mod.save(_store)
     return {"ok": True}
+
+
+@app.delete("/docs")
+def delete_doc(name: str):
+    removed = _store.remove_doc(name)
+    if removed == 0:
+        raise HTTPException(404, f"No document named {name!r} in the KB")
+    store_mod.save(_store)
+    return {"removed_chunks": removed, "doc": name, "remaining": len(_store.chunks)}
 
 
 @app.get("/stats")

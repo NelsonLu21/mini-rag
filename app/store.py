@@ -39,6 +39,22 @@ class Store:
                 self.df[term] += 1
         self.avgdl = sum(self.lens) / max(1, len(self.lens))
 
+    def remove_doc(self, doc: str) -> int:
+        keep = [i for i, c in enumerate(self.chunks) if c.doc != doc]
+        removed = len(self.chunks) - len(keep)
+        if removed == 0:
+            return 0
+        self.chunks = [self.chunks[i] for i in keep]
+        self.embeddings = [self.embeddings[i] for i in keep]
+        self.tf = [self.tf[i] for i in keep]
+        self.lens = [self.lens[i] for i in keep]
+        self.df = Counter()
+        for tf in self.tf:
+            for term in tf:
+                self.df[term] += 1
+        self.avgdl = sum(self.lens) / max(1, len(self.lens)) if self.lens else 0.0
+        return removed
+
     # ---- search ----
     def dense(self, qvec: np.ndarray, k: int) -> List[tuple[int, float]]:
         if not self.embeddings:

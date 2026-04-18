@@ -1,8 +1,41 @@
 """Answer generation: intent-templated prompts + post-hoc evidence check."""
 from __future__ import annotations
-from typing import List
+import re
+from typing import List, Tuple
 from . import mistral
 from .search import Hit
+
+_CITE_RX = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+
+
+def _filter_used(text: str, n_context: int) -> Tuple[str, List[int]]:
+    order: List[int] = []
+    seen = set()
+    for m in _CITE_RX.finditer(text):
+        for s in m.group(1).split(","):
+            try:
+                n = int(s.strip())
+            except ValueError:
+                continue
+            if 1 <= n <= n_context and n not in seen:
+                seen.add(n)
+                order.append(n)
+    if not order:
+        return text, []
+    mapping = {old: new for new, old in enumerate(order, 1)}
+
+    def sub(m):
+        parts = []
+        for s in m.group(1).split(","):
+            try:
+                n = int(s.strip())
+            except ValueError:
+                continue
+            if n in mapping:
+                parts.append(str(mapping[n]))
+        return "[" + ", ".join(parts) + "]" if parts else ""
+
+    return _CITE_RX.sub(sub, text), order
 
 SIM_THRESHOLD = 0.55  # min top-1 cosine to attempt an answer
 
@@ -24,8 +57,9 @@ def _format_context(hits: List[Hit]) -> str:
     parts = []
     for i, h in enumerate(hits):
         loc = f"{h.chunk.doc} p.{h.chunk.page}"
-        if h.chunk.headings:
-            loc += " > " + " > ".join(h.chunk.headings)
+        headings = getattr(h.chunk, "headings", None) or []
+        if headings:
+            loc += " > " + " > ".join(headings)
         parts.append(f"[{i+1}] ({loc})\n{h.chunk.text}")
     return "\n\n".join(parts)
 
@@ -49,15 +83,17 @@ def answer(query: str, hits: List[Hit], intent: str) -> dict:
         temperature=0.1,
     )
 
-    unsupported = evidence_check(text, hits)
+    renumbered, used_order = _filter_used(text, len(hits))
+    used_hits = [hits[i - 1] for i in used_order]
+    unsupported = evidence_check(renumbered, used_hits or hits)
     return {
-        "answer": text,
+        "answer": renumbered,
         "citations": [
             {"n": i + 1, "doc": h.chunk.doc, "page": h.chunk.page,
-             "headings": h.chunk.headings,
-             "score": round(h.score, 4), "dense": round(h.dense, 4),
-             "snippet": h.chunk.text[:240]}
-            for i, h in enumerate(hits)
+             "headings": getattr(h.chunk, "headings", None) or [],
+             "similarity": round(h.dense, 4),
+             "text": h.chunk.text}
+            for i, h in enumerate(used_hits)
         ],
         "evidence_check": {"checked": True, "unsupported": unsupported},
     }

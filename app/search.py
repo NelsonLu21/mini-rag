@@ -1,9 +1,3 @@
-"""Hybrid retrieval: dense + BM25 fused with Reciprocal Rank Fusion.
-
-Why RRF: scale-free combiner — dense cosine and BM25 produce scores on totally
-different scales, so weighted sums need calibration. RRF only uses ranks, so it
-combines them cleanly without tuning.
-"""
 from __future__ import annotations
 import numpy as np
 from dataclasses import dataclass
@@ -16,12 +10,12 @@ from . import mistral
 @dataclass
 class Hit:
     chunk: Chunk
-    score: float          # fused RRF score
-    dense: float          # raw cosine in [-1, 1]
+    score: float
+    dense: float
     bm25: float
 
 
-def hybrid(store: Store, query: str, k: int = 8, k_rrf: int = 60) -> List[Hit]:
+def retrieve(store: Store, query: str, k: int = 8, k_rrf: int = 60) -> List[Hit]:
     if not store.chunks:
         return []
     qvec = np.array(mistral.embed([query])[0], dtype=np.float32)

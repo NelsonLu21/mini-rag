@@ -10,13 +10,32 @@
   header { padding: 10px 16px; border-bottom: 1px solid #4443; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   header h1 { margin: 0; font-size: 16px; }
   header .spacer { flex: 1; }
+  #body { flex: 1; display: flex; overflow: hidden; }
+  #chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #sidebar { width: 260px; border-left: 1px solid #4443; overflow: auto; padding: 12px 14px; }
+  #sidebar h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; margin: 0 0 8px; }
+  .doc { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px dotted #4443; font-size: 13px; }
+  .doc .name { flex: 1; word-break: break-all; }
+  .doc .rm { background: transparent; color: inherit; border: none; cursor: pointer; font-size: 18px; line-height: 1; padding: 0 4px; opacity: .5; border-radius: 4px; }
+  .doc .rm:hover { opacity: 1; color: #c00; }
+  .empty { font-size: 12px; opacity: .6; }
   #log { flex: 1; overflow: auto; padding: 16px; }
   .msg { max-width: 780px; margin: 0 auto 14px; padding: 10px 14px; border-radius: 10px; }
   .me { background: #4caf501a; }
   .ai { background: #2196f31a; white-space: pre-wrap; }
   .meta { font-size: 11px; opacity: .7; margin-top: 6px; }
   .cite { font-size: 12px; border-top: 1px dashed #4443; margin-top: 8px; padding-top: 6px; }
-  .cite details { margin: 4px 0; }
+  .cgroup { margin: 4px 0; }
+  .cgroup-head { font-weight: 500; }
+  .cgroup-sub { font-size: 11px; opacity: .65; margin-left: 4px; }
+  .pill { display: inline-block; padding: 0 8px; margin: 0 2px; font-size: 12px; line-height: 18px; border: 1px solid #4446; background: transparent; color: inherit; border-radius: 10px; cursor: pointer; font-family: inherit; }
+  .pill:hover { background: #2196f333; }
+  .pill.active { background: #2196f3; color: #fff; border-color: #2196f3; }
+  .incite { color: #2196f3; text-decoration: none; font-weight: 500; cursor: pointer; }
+  .incite:hover { text-decoration: underline; }
+  .cpanel { font-size: 12px; margin: 6px 0 6px 12px; padding: 8px 10px; background: #8881; border-radius: 6px; white-space: pre-wrap; max-height: 240px; overflow: auto; }
+  .cpanel .cmeta { font-size: 11px; opacity: .7; margin-bottom: 6px; }
+  .hidden { display: none; }
   .warn { color: #c40; }
   form { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid #4443; }
   input[type=text] { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid #4443; background: transparent; color: inherit; }
@@ -35,12 +54,19 @@
   <button class="secondary" onclick="resetKB()">Reset KB</button>
 </header>
 
-<div id="log"></div>
-
-<form onsubmit="ask(event)">
-  <input id="q" type="text" placeholder="Ask something about your PDFs..." autocomplete="off" />
-  <button>Send</button>
-</form>
+<div id="body">
+  <div id="chat">
+    <div id="log"></div>
+    <form onsubmit="ask(event)">
+      <input id="q" type="text" placeholder="Ask something about your PDFs..." autocomplete="off" />
+      <button>Send</button>
+    </form>
+  </div>
+  <aside id="sidebar">
+    <h2>Documents</h2>
+    <div id="docs"></div>
+  </aside>
+</div>
 
 <script>
 const log = document.getElementById('log');
@@ -60,6 +86,33 @@ function esc(s) { return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;'
 async function refreshStats() {
   const r = await fetch('/stats').then(r => r.json());
   stats.textContent = `${r.docs.length} doc(s), ${r.chunks} chunk(s)`;
+  const el = document.getElementById('docs');
+  el.innerHTML = '';
+  if (!r.docs.length) {
+    el.innerHTML = '<div class="empty">No documents yet. Upload a PDF to get started.</div>';
+    return;
+  }
+  for (const name of r.docs) {
+    const row = document.createElement('div');
+    row.className = 'doc';
+    const span = document.createElement('span');
+    span.className = 'name';
+    span.textContent = name;
+    const btn = document.createElement('button');
+    btn.className = 'rm';
+    btn.title = 'Remove';
+    btn.textContent = '\u00D7';
+    btn.onclick = () => removeDoc(name);
+    row.append(span, btn);
+    el.appendChild(row);
+  }
+}
+
+async function removeDoc(name) {
+  if (!confirm(`Remove "${name}" from the knowledge base?`)) return;
+  const r = await fetch('/docs?name=' + encodeURIComponent(name), { method: 'DELETE' });
+  if (r.ok) refreshStats();
+  else alert('Failed: ' + (await r.text()));
 }
 
 async function upload() {
@@ -70,9 +123,11 @@ async function upload() {
   const node = add('ai', `Uploading ${inp.files.length} file(s)...`);
   try {
     const r = await fetch('/upload', { method: 'POST', body: fd }).then(r => r.json());
-    node.innerHTML = 'Ingested:<br>' + r.ingested.map(x =>
-      `&bull; ${esc(x.file)} — ${x.chunks} chunk(s)${x.warn ? ' <span class="warn">('+esc(x.warn)+')</span>' : ''}`
-    ).join('<br>');
+    node.innerHTML = 'Ingested:<br>' + r.ingested.map(x => {
+      const w = x.warn ? ` <span class="warn">(${esc(x.warn)})</span>` : '';
+      const rep = x.replaced ? ` <span class="warn">(replaced existing version: ${x.replaced} old chunk(s) removed)</span>` : '';
+      return `&bull; ${esc(x.file)} — ${x.chunks} chunk(s)${w}${rep}`;
+    }).join('<br>');
     refreshStats();
   } catch (e) { node.innerHTML = '<span class="warn">Upload failed: ' + esc(e.message) + '</span>'; }
 }
@@ -99,18 +154,33 @@ async function ask(ev) {
       body: JSON.stringify({ message: text }),
     }).then(r => r.json());
 
-    let html = esc(r.answer);
+    let answerHtml = esc(r.answer).replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (_m, inner) =>
+      inner.split(/\s*,\s*/).map(n => `<a class="incite" data-cn="${n}">[${n}]</a>`).join(' ')
+    );
+    let html = answerHtml;
     const meta = [];
     if (r.intent) meta.push('intent: ' + r.intent);
     if (r.rewritten_query && r.rewritten_query !== text) meta.push('rewritten: ' + esc(r.rewritten_query));
     if (meta.length) html += `<div class="meta">${meta.join(' &middot; ')}</div>`;
 
     if (r.citations && r.citations.length) {
+      const groups = [];
+      const gmap = new Map();
+      for (const c of r.citations) {
+        const key = c.doc + '||' + c.page;
+        if (!gmap.has(key)) { const g = { doc: c.doc, page: c.page, items: [] }; gmap.set(key, g); groups.push(g); }
+        gmap.get(key).items.push(c);
+      }
       html += '<div class="cite"><b>Sources</b>';
-      r.citations.forEach(c => {
-        const path = (c.headings && c.headings.length) ? ' &raquo; ' + c.headings.map(esc).join(' &raquo; ') : '';
-        html += `<details><summary>[${c.n}] ${esc(c.doc)} p.${c.page}${path} (score ${c.score}, dense ${c.dense})</summary>${esc(c.snippet)}...</details>`;
-      });
+      for (const g of groups) {
+        html += `<div class="cgroup"><span class="cgroup-head">${esc(g.doc)} p.${g.page}</span>`;
+        for (const c of g.items) html += ` <button class="pill" data-cn="${c.n}" type="button">[${c.n}]</button>`;
+        for (const c of g.items) {
+          const path = (c.headings && c.headings.length) ? c.headings.map(esc).join(' &raquo; ') + ' &middot; ' : '';
+          html += `<div class="cpanel hidden" data-cn="${c.n}"><div class="cmeta">${path}similarity ${c.similarity}</div>${esc(c.text)}</div>`;
+        }
+        html += '</div>';
+      }
       html += '</div>';
     }
     if (r.evidence_check && r.evidence_check.unsupported && r.evidence_check.unsupported.length) {
@@ -118,6 +188,18 @@ async function ask(ev) {
         r.evidence_check.unsupported.map(s => '&bull; ' + esc(s)).join('<br>') + '</div>';
     }
     node.innerHTML = html;
+    node.addEventListener('click', (e) => {
+      const el = e.target.closest('[data-cn]');
+      if (!el || !node.contains(el)) return;
+      e.preventDefault();
+      const cn = el.dataset.cn;
+      const panel = node.querySelector(`.cpanel[data-cn="${cn}"]`);
+      if (!panel) return;
+      const opening = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden');
+      node.querySelectorAll(`.pill[data-cn="${cn}"]`).forEach(p => p.classList.toggle('active', opening));
+      if (opening) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
   } catch (e) {
     node.innerHTML = '<span class="warn">Error: ' + esc(e.message) + '</span>';
   }
