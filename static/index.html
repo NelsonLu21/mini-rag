@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mini RAG</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 10px 16px; border-bottom: 1px solid #4443; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 16px; }
+  header .spacer { flex: 1; }
+  #log { flex: 1; overflow: auto; padding: 16px; }
+  .msg { max-width: 780px; margin: 0 auto 14px; padding: 10px 14px; border-radius: 10px; }
+  .me { background: #4caf501a; }
+  .ai { background: #2196f31a; white-space: pre-wrap; }
+  .meta { font-size: 11px; opacity: .7; margin-top: 6px; }
+  .cite { font-size: 12px; border-top: 1px dashed #4443; margin-top: 8px; padding-top: 6px; }
+  .cite details { margin: 4px 0; }
+  .warn { color: #c40; }
+  form { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid #4443; }
+  input[type=text] { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid #4443; background: transparent; color: inherit; }
+  button { padding: 8px 14px; border-radius: 8px; border: 1px solid #4443; background: #2196f3; color: #fff; cursor: pointer; }
+  button.secondary { background: transparent; color: inherit; }
+  #files { font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mini RAG</h1>
+  <input type="file" id="files" accept="application/pdf" multiple />
+  <button class="secondary" onclick="upload()">Upload</button>
+  <span class="spacer"></span>
+  <span id="stats" class="meta"></span>
+  <button class="secondary" onclick="resetKB()">Reset KB</button>
+</header>
+
+<div id="log"></div>
+
+<form onsubmit="ask(event)">
+  <input id="q" type="text" placeholder="Ask something about your PDFs..." autocomplete="off" />
+  <button>Send</button>
+</form>
+
+<script>
+const log = document.getElementById('log');
+const stats = document.getElementById('stats');
+
+function add(role, html) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.innerHTML = html;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+function esc(s) { return (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+async function refreshStats() {
+  const r = await fetch('/stats').then(r => r.json());
+  stats.textContent = `${r.docs.length} doc(s), ${r.chunks} chunk(s)`;
+}
+
+async function upload() {
+  const inp = document.getElementById('files');
+  if (!inp.files.length) return;
+  const fd = new FormData();
+  for (const f of inp.files) fd.append('files', f);
+  const node = add('ai', `Uploading ${inp.files.length} file(s)...`);
+  try {
+    const r = await fetch('/upload', { method: 'POST', body: fd }).then(r => r.json());
+    node.innerHTML = 'Ingested:<br>' + r.ingested.map(x =>
+      `&bull; ${esc(x.file)} — ${x.chunks} chunk(s)${x.warn ? ' <span class="warn">('+esc(x.warn)+')</span>' : ''}`
+    ).join('<br>');
+    refreshStats();
+  } catch (e) { node.innerHTML = '<span class="warn">Upload failed: ' + esc(e.message) + '</span>'; }
+}
+
+async function resetKB() {
+  if (!confirm('Clear the entire knowledge base?')) return;
+  await fetch('/reset', { method: 'POST' });
+  log.innerHTML = '';
+  refreshStats();
+}
+
+async function ask(ev) {
+  ev.preventDefault();
+  const q = document.getElementById('q');
+  const text = q.value.trim();
+  if (!text) return;
+  add('me', esc(text));
+  q.value = '';
+  const node = add('ai', '...');
+  try {
+    const r = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    }).then(r => r.json());
+
+    let html = esc(r.answer);
+    const meta = [];
+    if (r.intent) meta.push('intent: ' + r.intent);
+    if (r.rewritten_query && r.rewritten_query !== text) meta.push('rewritten: ' + esc(r.rewritten_query));
+    if (meta.length) html += `<div class="meta">${meta.join(' &middot; ')}</div>`;
+
+    if (r.citations && r.citations.length) {
+      html += '<div class="cite"><b>Sources</b>';
+      r.citations.forEach(c => {
+        html += `<details><summary>[${c.n}] ${esc(c.doc)} p.${c.page} (score ${c.score}, dense ${c.dense})</summary>${esc(c.snippet)}...</details>`;
+      });
+      html += '</div>';
+    }
+    if (r.evidence_check && r.evidence_check.unsupported && r.evidence_check.unsupported.length) {
+      html += `<div class="cite warn"><b>Possibly unsupported claims:</b><br>` +
+        r.evidence_check.unsupported.map(s => '&bull; ' + esc(s)).join('<br>') + '</div>';
+    }
+    node.innerHTML = html;
+  } catch (e) {
+    node.innerHTML = '<span class="warn">Error: ' + esc(e.message) + '</span>';
+  }
+}
+
+refreshStats();
+</script>
+</body>
+</html>
