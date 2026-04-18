@@ -159,7 +159,7 @@ async function ask(ev) {
     );
     let html = answerHtml;
     const meta = [];
-    if (r.intent) meta.push('intent: ' + r.intent);
+    if (r.route) meta.push('route: ' + r.route);
     if (r.rewritten_query && r.rewritten_query !== text) meta.push('rewritten: ' + esc(r.rewritten_query));
     if (meta.length) html += `<div class="meta">${meta.join(' &middot; ')}</div>`;
 

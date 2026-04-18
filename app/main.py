@@ -65,36 +65,27 @@ def chat(body: ChatIn):
     if not q:
         raise HTTPException(400, "empty message")
 
-    # 1. policy refusal (PII / legal / medical)
-    refusal = qmod.policy_check(q)
+    refusal = qmod.screen_for_sensitive_data(q)
     if refusal:
-        return {"answer": refusal, "intent": "refused", "citations": []}
+        return {"answer": refusal, "route": "refused", "citations": []}
 
-    # 2. intent detection — skip retrieval for chit-chat
-    intent = qmod.classify_intent(q)
-    if intent == "greeting":
-        return {
-            "answer": "Hi! Upload PDFs and ask me about them.",
-            "intent": intent,
-            "citations": [],
-        }
+    decision = qmod.route_query(q)
+    route = decision["route"]
+
+    if route == "chat":
+        return {"answer": decision.get("response") or "", "route": "chat", "citations": []}
+
+    if route == "clarify":
+        return {"answer": decision.get("question") or "Could you clarify what you're asking?", "route": "clarify", "citations": []}
 
     if not _store.chunks:
-        return {
-            "answer": "The knowledge base is empty. Please upload PDFs first.",
-            "intent": intent,
-            "citations": [],
-        }
+        return {"answer": "The knowledge base is empty. Please upload PDFs first.", "route": "kb", "citations": []}
 
-    # 3. query rewrite for retrieval
-    rewritten = qmod.transform(q)
-
-    # 4. hybrid search
+    rewritten = decision.get("rewrite") or q
+    fmt = decision.get("format") or "qa"
     hits = search.retrieve(_store, rewritten, k=body.k)
-
-    # 5. generate answer with citations + evidence check
-    out = generate.answer(q, hits, intent)
-    out["intent"] = intent
+    out = generate.answer(q, hits, fmt)
+    out["route"] = "kb"
     out["rewritten_query"] = rewritten
     return out
 
