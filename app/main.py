@@ -31,7 +31,7 @@ async def upload(files: list[UploadFile] = File(...)):
             tmp.write(await f.read())
             path = tmp.name
         try:
-            pages = ingest.extract_pages(path)
+            pages = ingest.extract_pages(path, f.filename)
             chunks = ingest.chunk_pages(pages, doc=f.filename)
             if not chunks:
                 added.append({"file": f.filename, "chunks": 0, "warn": "no extractable text"})

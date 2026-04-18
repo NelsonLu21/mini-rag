@@ -108,7 +108,8 @@ async function ask(ev) {
     if (r.citations && r.citations.length) {
       html += '<div class="cite"><b>Sources</b>';
       r.citations.forEach(c => {
-        html += `<details><summary>[${c.n}] ${esc(c.doc)} p.${c.page} (score ${c.score}, dense ${c.dense})</summary>${esc(c.snippet)}...</details>`;
+        const path = (c.headings && c.headings.length) ? ' &raquo; ' + c.headings.map(esc).join(' &raquo; ') : '';
+        html += `<details><summary>[${c.n}] ${esc(c.doc)} p.${c.page}${path} (score ${c.score}, dense ${c.dense})</summary>${esc(c.snippet)}...</details>`;
       });
       html += '</div>';
     }

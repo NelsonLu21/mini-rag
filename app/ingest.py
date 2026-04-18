@@ -1,23 +1,8 @@
-"""PDF text extraction and chunking.
-
-Chunking considerations:
-- Fixed-size token/char chunks miss semantic boundaries; pure sentence chunks vary
-  wildly in length and hurt embedding quality. We split on paragraph boundaries
-  first, then pack paragraphs into ~target_chars windows.
-- Overlap (sliding window) preserves context that straddles a chunk boundary so
-  retrieval doesn't lose answers split across chunks.
-- We keep page numbers per chunk for citation.
-- We strip excessive whitespace; PDFs often produce ragged line breaks mid-sentence
-  which we collapse so embeddings see fluent text.
-- For very long paragraphs we hard-split on character count to avoid one giant chunk.
-- We do NOT do layout-aware extraction (tables, columns) — out of scope; pypdf gives
-  reading-order text which is good enough for a baseline.
-"""
 from __future__ import annotations
 import re
-from dataclasses import dataclass
-from typing import List
-from pypdf import PdfReader
+from dataclasses import dataclass, field
+from typing import List, Tuple
+from . import mistral
 
 
 @dataclass
@@ -26,58 +11,84 @@ class Chunk:
     page: int
     text: str
     idx: int
+    headings: List[str] = field(default_factory=list)
 
 
-def _clean(text: str) -> str:
-    text = text.replace("\r", "\n")
-    # join hyphenated line breaks: "exam-\nple" -> "example"
-    text = re.sub(r"-\n(\w)", r"\1", text)
-    # collapse single newlines inside paragraphs but keep paragraph breaks
-    text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
-    text = re.sub(r"[ \t]+", " ", text)
-    return text.strip()
+_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_IMG = re.compile(r"!\[([^\]]*)\]\(([^)]*)\)")
 
 
-def extract_pages(path: str) -> List[tuple[int, str]]:
-    reader = PdfReader(path)
-    out = []
-    for i, page in enumerate(reader.pages):
-        try:
-            txt = page.extract_text() or ""
-        except Exception:
-            txt = ""
-        out.append((i + 1, _clean(txt)))
-    return out
+def extract_pages(path: str, filename: str) -> List[Tuple[int, str]]:
+    pages = mistral.ocr_file(path, filename)
+    return [(int(p.get("index", i)) + 1, _rewrite_images(p.get("markdown", "") or ""))
+            for i, p in enumerate(pages)]
 
 
-def chunk_pages(
-    pages: List[tuple[int, str]],
-    doc: str,
-    target_chars: int = 900,
-    overlap_chars: int = 150,
-) -> List[Chunk]:
-    chunks: List[Chunk] = []
-    idx = 0
-    for page, text in pages:
-        if not text:
-            continue
-        paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
-        buf = ""
-        for p in paragraphs:
-            # hard split paragraphs that are themselves too long
-            for piece in _hard_split(p, target_chars):
-                if len(buf) + len(piece) + 1 <= target_chars or not buf:
-                    buf = (buf + " " + piece).strip()
-                else:
-                    chunks.append(Chunk(doc, page, buf, idx)); idx += 1
-                    tail = buf[-overlap_chars:] if overlap_chars else ""
-                    buf = (tail + " " + piece).strip()
+def _rewrite_images(md: str) -> str:
+    return _IMG.sub(lambda m: f"[Image: {(m.group(1) or 'figure').strip()}]", md)
+
+
+def _split_blocks(md: str) -> List[Tuple[str, object]]:
+    blocks: List[Tuple[str, object]] = []
+    buf: List[str] = []
+
+    def flush() -> None:
         if buf:
-            chunks.append(Chunk(doc, page, buf, idx)); idx += 1
-    return chunks
+            text = "\n".join(buf).strip()
+            if text:
+                blocks.append(("text", text))
+            buf.clear()
+
+    for line in md.splitlines():
+        m = _HEADING.match(line)
+        if m:
+            flush()
+            blocks.append(("heading", (len(m.group(1)), m.group(2).strip())))
+        elif line.strip() == "":
+            flush()
+        else:
+            buf.append(line)
+    flush()
+    return blocks
 
 
 def _hard_split(text: str, n: int) -> List[str]:
     if len(text) <= n:
         return [text]
     return [text[i : i + n] for i in range(0, len(text), n)]
+
+
+def chunk_pages(
+    pages: List[Tuple[int, str]],
+    doc: str,
+    target_chars: int = 900,
+    overlap_chars: int = 150,
+) -> List[Chunk]:
+    chunks: List[Chunk] = []
+    idx = 0
+    headings: List[str] = []
+    buf = ""
+
+    for page, md in pages:
+        if not md:
+            continue
+        for kind, payload in _split_blocks(md):
+            if kind == "heading":
+                level, title = payload  # type: ignore[assignment]
+                if buf:
+                    chunks.append(Chunk(doc, page, buf.strip(), idx, list(headings))); idx += 1
+                    buf = ""
+                headings = headings[: max(0, level - 1)] + [title]
+                continue
+            for piece in _hard_split(payload, target_chars):  # type: ignore[arg-type]
+                if not buf or len(buf) + len(piece) + 2 <= target_chars:
+                    buf = (buf + "\n\n" + piece).strip() if buf else piece
+                else:
+                    chunks.append(Chunk(doc, page, buf.strip(), idx, list(headings))); idx += 1
+                    tail = buf[-overlap_chars:] if overlap_chars else ""
+                    buf = (tail + "\n\n" + piece).strip() if tail else piece
+        if buf:
+            chunks.append(Chunk(doc, page, buf.strip(), idx, list(headings))); idx += 1
+            buf = ""
+
+    return chunks

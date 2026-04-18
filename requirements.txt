@@ -1,6 +1,5 @@
 fastapi
 uvicorn[standard]
-pypdf
 httpx
 numpy
 python-multipart

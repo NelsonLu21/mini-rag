@@ -21,10 +21,13 @@ _STYLES = {
 
 
 def _format_context(hits: List[Hit]) -> str:
-    return "\n\n".join(
-        f"[{i+1}] ({h.chunk.doc} p.{h.chunk.page})\n{h.chunk.text}"
-        for i, h in enumerate(hits)
-    )
+    parts = []
+    for i, h in enumerate(hits):
+        loc = f"{h.chunk.doc} p.{h.chunk.page}"
+        if h.chunk.headings:
+            loc += " > " + " > ".join(h.chunk.headings)
+        parts.append(f"[{i+1}] ({loc})\n{h.chunk.text}")
+    return "\n\n".join(parts)
 
 
 def answer(query: str, hits: List[Hit], intent: str) -> dict:
@@ -51,6 +54,7 @@ def answer(query: str, hits: List[Hit], intent: str) -> dict:
         "answer": text,
         "citations": [
             {"n": i + 1, "doc": h.chunk.doc, "page": h.chunk.page,
+             "headings": h.chunk.headings,
              "score": round(h.score, 4), "dense": round(h.dense, 4),
              "snippet": h.chunk.text[:240]}
             for i, h in enumerate(hits)
