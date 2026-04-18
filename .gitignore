@@ -5,5 +5,7 @@ venv/
 .env
 data/store.pkl
 *.pdf
+!test/*.pdf
+test/ragbench/
 .idea/
 .vscode/

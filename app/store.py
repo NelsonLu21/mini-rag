@@ -6,7 +6,7 @@ from __future__ import annotations
 import math, os, pickle, re, threading
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import Any, Dict, List
 import numpy as np
 
 from .ingest import Chunk
@@ -26,6 +26,7 @@ class Store:
     tf: List[Counter] = field(default_factory=list)  # per-chunk term freq
     lens: List[int] = field(default_factory=list)
     avgdl: float = 0.0
+    doc_meta: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def add(self, chunks: List[Chunk], embs: List[List[float]]):
         for c, e in zip(chunks, embs):
@@ -42,6 +43,9 @@ class Store:
     def remove_doc(self, doc: str) -> int:
         keep = [i for i, c in enumerate(self.chunks) if c.doc != doc]
         removed = len(self.chunks) - len(keep)
+        if not hasattr(self, "doc_meta"):
+            self.doc_meta = {}
+        self.doc_meta.pop(doc, None)
         if removed == 0:
             return 0
         self.chunks = [self.chunks[i] for i in keep]
@@ -54,6 +58,11 @@ class Store:
                 self.df[term] += 1
         self.avgdl = sum(self.lens) / max(1, len(self.lens)) if self.lens else 0.0
         return removed
+
+    def set_doc_meta(self, doc: str, meta: Dict[str, Any]) -> None:
+        if not hasattr(self, "doc_meta"):
+            self.doc_meta = {}
+        self.doc_meta[doc] = meta
 
     # ---- search ----
     def dense(self, qvec: np.ndarray, k: int) -> List[tuple[int, float]]:
@@ -99,7 +108,10 @@ _PATH = os.path.join(os.path.dirname(__file__), "..", "data", "store.pkl")
 def load() -> Store:
     if os.path.exists(_PATH):
         with open(_PATH, "rb") as f:
-            return pickle.load(f)
+            s = pickle.load(f)
+        if not hasattr(s, "doc_meta"):
+            s.doc_meta = {}
+        return s
     return Store()
 
 

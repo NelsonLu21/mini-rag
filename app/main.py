@@ -41,10 +41,12 @@ async def upload(files: list[UploadFile] = File(...)):
             if not chunks:
                 added.append({"file": f.filename, "chunks": 0, "warn": "no extractable text"})
                 continue
+            doc_meta = ingest.extract_doc_meta(pages, f.filename)
             embs = mistral.embed([c.text for c in chunks])
             replaced = _store.remove_doc(f.filename)
             _store.add(chunks, embs)
-            entry = {"file": f.filename, "chunks": len(chunks)}
+            _store.set_doc_meta(f.filename, doc_meta)
+            entry = {"file": f.filename, "chunks": len(chunks), "title": doc_meta.get("title")}
             if replaced:
                 entry["replaced"] = replaced
             added.append(entry)

@@ -47,8 +47,10 @@
 <body>
 <header>
   <h1>Mini RAG</h1>
-  <input type="file" id="files" accept="application/pdf" multiple />
-  <button class="secondary" onclick="upload()">Upload</button>
+  <input type="file" id="files" accept="application/pdf" multiple style="display:none" />
+  <button class="secondary" onclick="document.getElementById('files').click()">Upload files</button>
+  <input type="file" id="folder" webkitdirectory directory multiple style="display:none" />
+  <button class="secondary" onclick="document.getElementById('folder').click()">Upload folder</button>
   <span class="spacer"></span>
   <span id="stats" class="meta"></span>
   <button class="secondary" onclick="resetKB()">Reset KB</button>
@@ -115,22 +117,43 @@ async function removeDoc(name) {
   else alert('Failed: ' + (await r.text()));
 }
 
-async function upload() {
-  const inp = document.getElementById('files');
-  if (!inp.files.length) return;
+async function uploadFiles(files, source) {
+  const pdfs = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  const skipped = files.length - pdfs.length;
+  if (!pdfs.length) {
+    add('ai', `<span class="warn">No PDFs found in ${esc(source)}.</span>`);
+    return;
+  }
   const fd = new FormData();
-  for (const f of inp.files) fd.append('files', f);
-  const node = add('ai', `Uploading ${inp.files.length} file(s)...`);
+  for (const f of pdfs) fd.append('files', f, f.name);
+  const skipNote = skipped ? ` (skipped ${skipped} non-PDF file(s))` : '';
+  const node = add('ai', `Uploading ${pdfs.length} PDF(s) from ${esc(source)}${skipNote}...`);
   try {
     const r = await fetch('/upload', { method: 'POST', body: fd }).then(r => r.json());
     node.innerHTML = 'Ingested:<br>' + r.ingested.map(x => {
       const w = x.warn ? ` <span class="warn">(${esc(x.warn)})</span>` : '';
       const rep = x.replaced ? ` <span class="warn">(replaced existing version: ${x.replaced} old chunk(s) removed)</span>` : '';
-      return `&bull; ${esc(x.file)} — ${x.chunks} chunk(s)${w}${rep}`;
+      const title = x.title && x.title !== x.file ? ` <span class="meta">[${esc(x.title)}]</span>` : '';
+      return `&bull; ${esc(x.file)} — ${x.chunks} chunk(s)${title}${w}${rep}`;
     }).join('<br>');
     refreshStats();
   } catch (e) { node.innerHTML = '<span class="warn">Upload failed: ' + esc(e.message) + '</span>'; }
 }
+
+document.getElementById('files').addEventListener('change', async (e) => {
+  const files = e.target.files;
+  if (!files.length) return;
+  await uploadFiles(files, `${files.length} selected file(s)`);
+  e.target.value = '';
+});
+
+document.getElementById('folder').addEventListener('change', async (e) => {
+  const files = e.target.files;
+  if (!files.length) return;
+  const folderName = files[0].webkitRelativePath ? files[0].webkitRelativePath.split('/')[0] : 'folder';
+  await uploadFiles(files, `folder "${folderName}"`);
+  e.target.value = '';
+});
 
 async function resetKB() {
   if (!confirm('Clear the entire knowledge base?')) return;
