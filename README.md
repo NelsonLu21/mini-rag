@@ -4,7 +4,7 @@ A Retrieval-Augmented Generation system over PDFs.
 FastAPI backend, vanilla HTML chat UI, Mistral AI for OCR / embeddings / generation.
 
 Highlights: 
-- **Mistral OCR** PDFs are visually structured. OCR does a great job understanding
+- **Mistral OCR** for PDF ingestion. PDFs are visually structured. OCR does a great job understanding
   tables, columns, and line breaks - returns clean markdown with headings preserved.
 - **Heading-aware paragraph chunking.** Paragraphs are packed into
   ~900-char windows with 150-char overlap, and headings treated as chunk
