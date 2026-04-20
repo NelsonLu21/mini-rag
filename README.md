@@ -1,9 +1,33 @@
 # Mini RAG
 
-A minimal Retrieval-Augmented Generation system over PDFs.
+A Retrieval-Augmented Generation system over PDFs.
 FastAPI backend, vanilla HTML chat UI, Mistral AI for OCR / embeddings / generation.
-No external vector database, no RAG framework.
 
+Highlights: 
+- **Mistral OCR** PDFs are visually structured. OCR does a great job understanding
+  tables, columns, and line breaks - returns clean markdown with headings preserved.
+- **Heading-aware paragraph chunking.** Paragraphs are packed into
+  ~900-char windows with 150-char overlap, and headings treated as chunk
+  boundaries. Each chunk **carries its full heading path** (improves performance in testing by a lot), used both in the LLM 
+  context and in citation labels.
+- **One LLM call for routing, rewriting, and format.** A single call per query.
+  Returns the route (chat / kb / clarify), a keyword-rich rewrite,
+  and the answer format (qa / list / table). The rewrite prompt asks for
+  synonyms and words that are likely to appear together in the chunks 
+  (e.g. "authors", "affiliation") so keyword-poor
+  user phrasing still surfaces the right chunk.
+- **Cosine with a refusal gate.** All embeddings are L2-normalized at
+  insertion, so retrieval is one matmul.
+  Cosine has a stable, interpretable scale, so a single threshold
+  (`top-1 < 0.55 → "insufficient evidence"`) catches
+  off-topic queries.
+- **Concise presentation of citations in the answer** After generation we drop
+  chunks that was retrieved but the model didn't actually cite, and present
+  the cited sources in a concise way: Document, page number, [1]...[n]. I also
+  made the citation clickable both from the in-text citations and from the citation
+  list, so users can inspect directly the original text. 
+- **Evidence check.** Every answer sentence is checked against the sources using
+  token overlap and LLM calls to ensure fidelity. 
 ---
 
 ## Setup
@@ -30,12 +54,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Configure your Mistral API key
-
-```bash
-cp .env.example .env
-# then edit .env and set MISTRAL_API_KEY=...
-```
+### 3. Configure your Mistral API key in .env file
 
 ### 4. Run
 
@@ -45,7 +64,7 @@ uvicorn app.main:app --reload
 
 Open **http://localhost:8000**. Upload a PDF (or a folder of PDFs) and chat.
 
-### Optional: evaluation
+### Evaluation
 
 Two scripts under `test/` reproduce the small-scale evaluation against
 [Vectara's `open_ragbench`](https://huggingface.co/datasets/vectara/open_ragbench):
@@ -148,35 +167,6 @@ JSON response
 The UI renders inline `[n]` as clickable anchors and groups citations by
 `doc p.N [1] [2]`. Clicking a pill (or an inline `[n]`) toggles a panel
 showing the full chunk text.
-
-### Key design decisions
-
-- **Mistral OCR over plain text extraction.** PDFs are visually structured.
-  Plain-text extractors mangle tables, columns, and line breaks;
-  OCR returns clean markdown with headings preserved.
-- **Heading-aware paragraph chunking.** Paragraphs are packed into
-  ~900-char windows with 150-char overlap, and headings treated as hard chunk
-  boundaries. Each chunk carries its full heading path, used both in the LLM 
-  context and in citation labels.
-- **One LLM call for routing, rewriting, and format.** A single call per query.
-  Returns the route (chat / kb / clarify), a keyword-rich rewrite,
-  and the answer format (qa / list / table). The rewrite prompt asks for
-  synonyms and words that are likely to appear together in the chunks 
-  (e.g. "authors", "affiliation") so keyword-poor
-  user phrasing still surfaces the right chunk.
-- **Cosine with a hard refusal gate.** All embeddings are L2-normalized at
-  insertion, so retrieval is one matmul and no vector DB is required.
-  Cosine has a stable, interpretable scale, so a single threshold
-  (`top-1 < 0.55 → "insufficient evidence"`) deterministically catches
-  off-topic queries before the LLM is even called.
-- **Cited-only sources, renumbered.** After generation we parse the
-  answer's `[n]` markers, drop chunks the model didn't actually cite, and
-  renumber the remainder so the displayed Sources list is `[1]..[m]` with
-  no gaps. Users only see references that are used in the answer.
-- **Two-stage evidence check.** Every answer sentence is first matched
-  against retrieved chunks by token overlap (large overlap almost certainly 
-  means the answer is grounded); only suspicious sentences get embedded for 
-  a cosine check. 
 
 ---
 
